@@ -3,8 +3,11 @@
 import os
 import math
 import re
+import select
 import sys
+import termios
 import time
+import tty
 from typing import List, Optional, Tuple, Union
 from datetime import datetime, timedelta
 
@@ -28,6 +31,20 @@ TIMER_LOW_PERCENT: float = 0.2
 CONTEXT_SETTINGS: dict = dict(help_option_names=["-h", "--help"])
 
 Number = Union[int, float]
+
+
+def _wait_for_key(timeout: float) -> bool:
+    """Wait up to `timeout` seconds for a keypress. Returns True if a key was pressed."""
+    old_settings = termios.tcgetattr(sys.stdin)
+    try:
+        tty.setcbreak(sys.stdin.fileno())
+        rlist, _, _ = select.select([sys.stdin], [], [], timeout)
+        if rlist:
+            sys.stdin.read(1)
+            return True
+        return False
+    finally:
+        termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
 
 def standardize_time_str(num: Number) -> str:
@@ -295,10 +312,10 @@ def main(duration: Optional[str], no_bell: bool, message: str, font: str, list_f
                 time.sleep(1)
 
         with console.screen(style="bold white on red") as screen:
-            while True:
-                if not no_bell:
-                    console.bell()
+            if not no_bell:
+                console.bell()
 
+            while True:
                 timer_over_text = Text(text2art("00:00:00", font=font), style="blink")
                 message_text = Text(message, style="white")
                 message_text.align(
@@ -307,14 +324,23 @@ def main(duration: Optional[str], no_bell: bool, message: str, font: str, list_f
                     .normalize()
                     .maximum,
                 )
+                hint_text = Text("Press any key to exit", style="white dim")
+                hint_text.align(
+                    "center",
+                    Measurement.get(console, console.options, timer_over_text)
+                    .normalize()
+                    .maximum,
+                )
 
-                display_text = Text.assemble(timer_over_text, message_text)
+                display_text = Text.assemble(timer_over_text, message_text, Text("\n"), hint_text)
 
                 display = Align.center(
                     display_text, vertical="middle", height=console.height + 1
                 )
                 screen.update(Panel(display))
-                time.sleep(10)
+
+                if _wait_for_key(1):
+                    break
     except KeyboardInterrupt:
         console.print("[red]Quitting...[/red]")
         sys.exit()
